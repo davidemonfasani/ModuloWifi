@@ -4,28 +4,30 @@
 #include <SoftwareSerial.h>
 #include <DHT.h>
 
-#define DHTPIN D3      // Definisci il pin a cui è collegato il sensore
+#define DHTPIN D3      // il pin a cui è collegato il sensore
 #define DHTTYPE DHT11  // DHT 11
 DHT dht(DHTPIN, DHTTYPE);
 
 //NodeMCU 1.0 (ESP-12E Module) come scheda
-// Definisci il nome della tua rete WiFi e la password
+//  rete WiFi e la password
 const char* ssid = "SIUMNELKEKKIN";
 const char* password = "siumkeksium";
 
+String UrlServer = "http://192.168.125.41:8000/api/"; 
+int id_sensor = 1;//il sensore deve essere creato dall'utente dall'app prima
+int id_cellar = 1;
 // Variabili per memorizzare i dati del sensore
-String temperaturaMax;
-String umiditaMax;
-String temperaturaMin;
-String umiditaMin;
-String timer;
-
-// Inizializza la comunicazione seriale software sui pin D1 (GPIO5) e D2 (GPIO4)
-SoftwareSerial mySerial(D3, D4);  // RX, TX
+int temperaturaMax;
+int umiditaMax;
+int temperaturaMin;
+int umiditaMin;
+int timer;
+bool erroreLettura;
+bool erroreValori;
 
 void setup() {
   Serial.begin(9600);
-  mySerial.begin(9600);
+  erroreValori = false;
   dht.begin();
   delay(100);
 
@@ -47,13 +49,12 @@ void setup() {
   // Effettua la richiesta HTTP iniziale
   WiFiClient client;
   HTTPClient http;
-  String url = "http://192.168.186.41:8000/api/Sensor/info?id_cellar=1&id_sensor=1";  // Sostituisci con l'URL della tua pagina web
+  String url = UrlServer + "Sensor/info?id_cellar=" + String(id_cellar) + "&id_sensor=" + String(id_sensor);
 
   if (http.begin(client, url)) {
     int httpCode = http.GET();
 
-    // Se la richiesta ha avuto successo, salva i dati del sensore nelle variabili
-    if (httpCode > 0) {
+    if (httpCode == HTTP_CODE_OK) {
       String payload = http.getString();
       Serial.println(payload);
 
@@ -70,14 +71,31 @@ void setup() {
         return;
       }
 
+      // Verifica se il documento JSON contiene i campi richiesti
+      if (!doc.containsKey("Parametri del sensore")) {
+        Serial.println("Il documento JSON non contiene il campo 'Parametri del sensore'");
+        erroreValori = true;
+        return;
+      }
+
+      JsonObject parametriDelSensore = doc["Parametri del sensore"];
+      if (!parametriDelSensore.containsKey("TemperaturaMax") || !parametriDelSensore.containsKey("UmiditaMax") || !parametriDelSensore.containsKey("TemperaturaMin") || !parametriDelSensore.containsKey("UmiditaMin") || !parametriDelSensore.containsKey("Timer")) {
+        Serial.println("Il campo 'Parametri del sensore' non contiene uno dei campi richiesti");
+        erroreValori = true;
+        return;
+      }
+
       // Ottieni i dati del sensore
-      temperaturaMax = doc["Parametri del sensore"]["TemperaturaMax"].as<String>();
-      umiditaMax = doc["Parametri del sensore"]["UmiditaMax"].as<String>();
-      temperaturaMin = doc["Parametri del sensore"]["TemperaturaMin"].as<String>();
-      umiditaMin = doc["Parametri del sensore"]["UmiditaMin"].as<String>();
-      timer = doc["Parametri del sensore"]["Timer"].as<String>();
+      temperaturaMax = parametriDelSensore["TemperaturaMax"].as<int>();
+      umiditaMax = parametriDelSensore["UmiditaMax"].as<int>();
+      temperaturaMin = parametriDelSensore["TemperaturaMin"].as<int>();
+      umiditaMin = parametriDelSensore["UmiditaMin"].as<int>();
+      timer = parametriDelSensore["Timer"].as<int>();
     } else {
-      Serial.println("Errore nella richiesta HTTP");
+      Serial.print("Errore nella richiesta HTTP, codice di stato: ");
+      Serial.println(httpCode);
+      erroreValori = true;
+      return;
     }
 
     http.end();
@@ -85,64 +103,76 @@ void setup() {
     Serial.println("Impossibile connettersi al server");
   }
   delay(1000);
-  // Invia i dati del sensore all'Arduino Uno tramite la porta seriale software
-  mySerial.print(temperaturaMax);
-  mySerial.print("*");
-  delay(500);
-  mySerial.print(umiditaMax);
-  mySerial.print("*");
-  delay(500);
-  mySerial.print(temperaturaMin);
-  mySerial.print("*");
-  delay(500);
-  mySerial.print(umiditaMin);
-  mySerial.print("*");
-  delay(500);
-  mySerial.print(timer);
-  mySerial.println("$$##$$");
-  delay(500);
 }
+
 
 void loop() {
-  // Leggi i dati del sensore DHT11
-// ...
-// Leggi i dati del sensore DHT11
-float h = dht.readHumidity();
-float t = dht.readTemperature();
+  // Verifica se le variabili sono state impostate
+  if (erroreValori == true) {
+    Serial.println("Variabili non impostate, ritorno...");
+    setup();
+    return;
+  }
+  erroreLettura = false;
+  int intervallo = 3000;  // Controlla la temperatura ogni 3 secondo
+  int tempoTotale = 0;
+  //faccio un controllo periodico dato che arduino non supporta il multitread
+  while (tempoTotale < timer * 1000) {
+    // Leggi i dati del sensore DHT11
+    float h = dht.readHumidity();
+    float t = dht.readTemperature();
 
-// Verifica se la lettura del sensore è andata a buon fine
-if (isnan(h) || isnan(t)) {
-  Serial.println("Errore nella lettura del sensore DHT11");
-  return;
+    // Verifica se la lettura del sensore è andata a buon fine
+    if (isnan(h) || isnan(t)) {
+
+      Serial.println("Errore nella lettura del sensore DHT11");
+    }
+
+    // Arrotonda i valori di umidità e temperatura a interi
+    int hInt = round(h);
+    int tInt = round(t);
+
+    // Invia i dati al server periodicamente
+
+
+    // Controlla se i valori di umidità e temperatura non rispettano i valori massimi e minimi
+    if (tInt > temperaturaMax || tInt < temperaturaMin || hInt > umiditaMax || hInt < umiditaMin) {
+      Serial.println("Errore nei valori dell sensore");
+      // Invia un report al server
+      if (erroreLettura == false) {
+        inviaDati(tInt, hInt);
+        erroreLettura = true;
+        Serial.println("invio errore");
+      }
+    } else if (erroreLettura == true) {
+      inviaDati(tInt, hInt);
+      erroreLettura = false;
+      Serial.println("invio dopo errore");
+    } else if (tempoTotale == 0 && erroreLettura == false) {
+      inviaDati(tInt, hInt);
+      Serial.println("invio periodico");
+    }
+
+
+    delay(intervallo);  // Attendi l'intervallo prima di effettuare la prossima lettura
+    tempoTotale += intervallo;
+  }
 }
 
-// Arrotonda i valori di umidità e temperatura a interi
-int hInt = round(h);
-int tInt = round(t);
-
-Serial.print("Umidità relativa: ");
-Serial.print(hInt);
-Serial.print(" %\t");
-Serial.print("Temperatura: ");
-Serial.print(tInt);
-Serial.println(" °C");
-
-// Controlla se i valori di umidità e temperatura non rispettano i valori massimi e minimi
-if (hInt > umiditaMax.toInt() || hInt < umiditaMin.toInt() || tInt > temperaturaMax.toInt() || tInt < temperaturaMin.toInt()) {
-  // Invia un report al server
+void inviaDati(int temperatura, int umidita) {
   WiFiClient client;
   HTTPClient http;
-  String url = "http://192.168.186.41:8000/api/Monitoring/report";  // Sostituisci con l'URL del tuo server
+  String url = UrlServer + "Monitoring/report";
 
   http.begin(client, url);
   http.addHeader("Content-Type", "application/json");
 
   // Crea un documento JSON con i dati del sensore
   StaticJsonDocument<200> doc;
-  doc["Temperatura"] = tInt;  // Usa i valori interi
-  doc["Umidita"] = hInt;      // Usa i valori interi
-  doc["Peso"] = 10;           // Aggiungi il valore del peso
-  doc["id_sensor"] = 1;       // Aggiungi l'id del sensore, sostituisci con il valore corretto
+  doc["Temperatura"] = temperatura;  // Usa i valori interi
+  doc["Umidita"] = umidita;          // Usa i valori interi
+  doc["id_sensor"] = id_sensor;      // Aggiungi l'id del sensore, sostituisci con il valore corretto
+  doc["Peso"] = 15;                  // il peso è fisso perchè non è ancora stata implementata una cella di carico
 
   // Serializza il documento JSON
   String payload;
@@ -150,19 +180,13 @@ if (hInt > umiditaMax.toInt() || hInt < umiditaMin.toInt() || tInt > temperatura
 
   // Invia i dati al server
   int httpCode = http.POST(payload);
-  if (httpCode > 0) {
-    Serial.println("Report inviato con successo");
+  String response = http.getString();
+  if (httpCode == HTTP_CODE_OK) {
+
+    Serial.println("Dati inviati con successo: " + response + "payload" + payload);
   } else {
-    Serial.println("Errore nell'invio del report");
+    Serial.println("Errore nell'invio dei dati: " + response + "payload" + payload);
   }
 
   http.end();
-  
-    delay(timer.toInt() * 1000);
-}
-// ...
-
-  
-
-  delay(timer.toInt() * 1000);  // Attendi il tempo specificato dal timer prima di effettuare la prossima lettura
 }
